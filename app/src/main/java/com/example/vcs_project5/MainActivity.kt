@@ -1,5 +1,6 @@
 package com.example.vcs_project5
 
+import android.annotation.SuppressLint
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -13,162 +14,152 @@ import android.widget.ListView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.graphics.drawable.toDrawable
-import com.example.vcs_project5.databinding.ActivityMainBinding
 import androidx.core.graphics.toColorInt
+import com.example.vcs_project5.databinding.ActivityMainBinding
 
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
-    private val activeSpans = mutableMapOf<String, Any>()
+    private val currentStyles = mutableMapOf<String, Any>()
+    private var isUpdating = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
-        setupListeners()
-        setupTypingListener()
+        initToolbar()
+        initTyping()
     }
-    private fun setupListeners() {
+    private fun initToolbar() {
         binding.btnBold.setOnClickListener {
-            toggleStyle("BOLD", StyleSpan(Typeface.BOLD))
+            toggleStyle("BOLD", StyleSpan(Typeface.BOLD), binding.btnBold)
         }
         binding.btnItalic.setOnClickListener {
-            toggleStyle("ITALIC", StyleSpan(Typeface.ITALIC))
+            toggleStyle("ITALIC", StyleSpan(Typeface.ITALIC), binding.btnItalic)
         }
         binding.btnUnderline.setOnClickListener {
-            toggleStyle("UNDERLINE", UnderlineSpan())
+            toggleStyle("UNDERLINE", UnderlineSpan(), binding.btnUnderline)
         }
-        binding.btnColor.setOnClickListener {
-            showColorPicker()
-        }
-        binding.btnSize.setOnClickListener {
-            showSizePicker()
-        }
+        binding.btnColor.setOnClickListener { showColorPicker() }
+        binding.btnSize.setOnClickListener { showSizePicker() }
     }
-    private fun toggleStyle(key: String, span: Any) {
+    private fun toggleStyle(key: String, span: Any, btn: View) {
         val (start, end) = getSelection()
         val text = binding.editText.text
-
         if (start == end) {
-            if (activeSpans.containsKey(key)) {
-                activeSpans.remove(key)
+            if (currentStyles.containsKey(key)) {
+                currentStyles.remove(key)
+                setActive(btn, false)
             } else {
-                activeSpans[key] = span
+                currentStyles[key] = span
+                setActive(btn, true)
             }
             return
         }
-
-        // Xử lý khi có bôi đen text
-        val clazz = span.javaClass
-        val existingSpans = text.getSpans(start, end, clazz)
-
-        // Tìm xem đã có span cùng loại (ví dụ cùng là BOLD) chưa
-        val specificSpan = if (span is StyleSpan) {
-            existingSpans.filterIsInstance<StyleSpan>().find { it.style == span.style }
+        val existing = text.getSpans(start, end, span.javaClass)
+        val target = if (span is StyleSpan) {
+            existing.filterIsInstance<StyleSpan>()
+                .find { it.style == span.style }
         } else {
-            existingSpans.firstOrNull()
+            existing.firstOrNull()
         }
-
-        if (specificSpan != null) {
-            text.removeSpan(specificSpan)
+        if (target != null) {
+            text.removeSpan(target)
+            setActive(btn, false)
         } else {
-            text.setSpan(cloneSpan(span), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            text.setSpan(
+                copySpan(span),
+                start,
+                end,
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+            setActive(btn, true)
         }
     }
-    private fun applySpan(span: Any, start: Int, end: Int) {
-        binding.editText.text.setSpan(
-            span,
-            start,
-            end,
-            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-        )
-    }
-    private fun handleStyle(span: Any) {
+    private fun applyStyle(span: Any) {
         val (start, end) = getSelection()
-        val key = when(span) {
-            is ForegroundColorSpan -> "COLOR"
-            is AbsoluteSizeSpan -> "SIZE"
-            else -> span.javaClass.simpleName
-        }
+        val key = getKey(span)
         if (start == end) {
-            activeSpans[key] = span
+            currentStyles[key] = span
         } else {
-            binding.editText.text.setSpan(cloneSpan(span), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            binding.editText.text.setSpan(
+                copySpan(span),
+                start,
+                end,
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
         }
     }
-    private fun getSelection(): Pair<Int, Int> =
-        Pair(binding.editText.selectionStart, binding.editText.selectionEnd)
-    private fun setupTypingListener() {
+    private fun initTyping() {
         binding.editText.addTextChangedListener(object : TextWatcher {
             override fun afterTextChanged(s: Editable?) {
+                if (isUpdating || s == null) return
                 val cursor = binding.editText.selectionStart
-                if (cursor <= 0 || s == null) return
+                if (cursor <= 0) return
+                isUpdating = true
 
-                activeSpans.values.forEach { span ->
-                    val clazz = span.javaClass
-                    val existing = s.getSpans(cursor - 1, cursor, clazz)
-
-                    val isAlreadyApplied = if (span is StyleSpan) {
-                        existing.filterIsInstance<StyleSpan>().any { it.style == span.style }
-                    } else {
-                        existing.isNotEmpty()
+                val lastChar = s[cursor - 1]
+                if (lastChar == '\n') {
+                    val prevIndex = cursor - 2
+                    if (prevIndex >= 0) {
+                        val spans = s.getSpans(prevIndex, prevIndex + 1, Any::class.java)
+                        spans.forEach { span ->
+                            s.setSpan(
+                                copySpan(span),
+                                cursor,
+                                cursor,
+                                Spanned.SPAN_INCLUSIVE_INCLUSIVE
+                            )
+                        }
                     }
-
-                    if (!isAlreadyApplied) {
+                }
+                currentStyles.values.forEach { span ->
+                    val exist = s.getSpans(cursor - 1, cursor, span.javaClass)
+                    val applied = if (span is StyleSpan) {
+                        exist.filterIsInstance<StyleSpan>()
+                            .any { it.style == span.style }
+                    } else {
+                        exist.isNotEmpty()
+                    }
+                    if (!applied) {
                         s.setSpan(
-                            cloneSpan(span),
+                            copySpan(span),
                             cursor - 1,
                             cursor,
-                            Spanned.SPAN_EXCLUSIVE_INCLUSIVE
+                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                         )
                     }
                 }
+                isUpdating = false
             }
+
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
         })
     }
-    private fun cloneSpan(span: Any): Any {
-        return when (span) {
-            is StyleSpan -> StyleSpan(span.style)
-            is ForegroundColorSpan -> ForegroundColorSpan(span.foregroundColor)
-            is AbsoluteSizeSpan -> AbsoluteSizeSpan(span.size, span.dip)
-            is UnderlineSpan -> UnderlineSpan()
-            else -> span
-        }
-    }
+    @SuppressLint("InflateParams")
     private fun showSizePicker() {
-        val dialogView = layoutInflater.inflate(R.layout.dialog_size_picker, null)
-        val listView = dialogView.findViewById<ListView>(R.id.listSize)
-
+        val view = layoutInflater.inflate(R.layout.dialog_size_picker, null)
+        val list = view.findViewById<ListView>(R.id.listSize)
         val sizes = listOf(10, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40)
-
-        val adapter = ArrayAdapter(
+        list.adapter = ArrayAdapter(
             this,
             android.R.layout.simple_list_item_1,
             sizes.map { "Size $it" }
         )
 
-        listView.adapter = adapter
-
-        val dialog = AlertDialog.Builder(this)
-            .setView(dialogView)
-            .create()
-
-        listView.setOnItemClickListener { _, _, position, _ ->
-            val size = sizes[position]
-            val span = AbsoluteSizeSpan(size, true)
-            activeSpans["SIZE"] = span
-            handleStyle(span)
-
+        val dialog = createDialog(view)
+        list.setOnItemClickListener { _, _, pos, _ ->
+            val span = AbsoluteSizeSpan(sizes[pos], true)
+            currentStyles["SIZE"] = span
+            applyStyle(span)
             dialog.dismiss()
         }
-
         dialog.show()
-        dialog.window?.setBackgroundDrawable(Color.TRANSPARENT.toDrawable())
     }
+    @SuppressLint("InflateParams")
     private fun showColorPicker() {
-        val dialogView = layoutInflater.inflate(R.layout.dialog_color_picker, null)
-        val grid = dialogView.findViewById<GridLayout>(R.id.colorGrid)
+        val view = layoutInflater.inflate(R.layout.dialog_color_picker, null)
+        val grid = view.findViewById<GridLayout>(R.id.colorGrid)
 
         val colors = listOf(
             Color.BLACK, Color.DKGRAY, Color.GRAY, Color.LTGRAY,
@@ -180,34 +171,78 @@ class MainActivity : AppCompatActivity() {
             "#795548".toColorInt(),
             "#607D8B".toColorInt()
         )
-        val dialog = AlertDialog.Builder(this)
-            .setView(dialogView)
-            .create()
+
+        val dialog = createDialog(view)
 
         colors.forEach { color ->
-            val view = View(this).apply {
-                layoutParams = GridLayout.LayoutParams().apply {
-                    width = 0
-                    height = resources.displayMetrics.widthPixels / 6
-                    columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
-                    setMargins(8, 8, 8, 8)
-                }
-                val drawable = GradientDrawable().apply {
-                    setColor(color)
-                    cornerRadius = 20f
-                }
-                background = drawable
-
-                setOnClickListener {
-                    val span = ForegroundColorSpan(color)
-                    activeSpans["COLOR"] = span
-                    handleStyle(span)
-                    dialog.dismiss()
-                }
-            }
-            grid.addView(view)
+            grid.addView(createColorItem(color) {
+                val span = ForegroundColorSpan(color)
+                currentStyles["COLOR"] = span
+                applyStyle(span)
+                dialog.dismiss()
+            })
         }
+
         dialog.show()
-        dialog.window?.setBackgroundDrawable(Color.TRANSPARENT.toDrawable())
+    }
+    private fun createDialog(view: View): AlertDialog {
+        return AlertDialog.Builder(this)
+            .setView(view)
+            .create()
+            .apply {
+                window?.setBackgroundDrawable(Color.TRANSPARENT.toDrawable())
+            }
+    }
+    private fun createColorItem(color: Int, onClick: () -> Unit): View {
+        return View(this).apply {
+            layoutParams = GridLayout.LayoutParams().apply {
+                width = 0
+                height = resources.displayMetrics.widthPixels / 6
+                columnSpec = GridLayout.spec(GridLayout.UNDEFINED, 1f)
+                setMargins(8, 8, 8, 8)
+            }
+            background = GradientDrawable().apply {
+                setColor(color)
+                cornerRadius = 20f
+            }
+            setOnClickListener { onClick() }
+        }
+    }
+    private fun getSelection(): Pair<Int, Int> {
+        val start = binding.editText.selectionStart
+        val end = binding.editText.selectionEnd
+        return if (start <= end) {
+            start to end
+        } else {
+            end to start
+        }
+    }
+    private fun setActive(view: View, active: Boolean) {
+        view.setBackgroundColor(
+            if (active) "#AAAAAA".toColorInt()
+            else "#DDDDDD".toColorInt()
+        )
+    }
+    private fun getKey(span: Any): String {
+        return when (span) {
+            is ForegroundColorSpan -> "COLOR"
+            is AbsoluteSizeSpan -> "SIZE"
+            is StyleSpan -> when (span.style) {
+                Typeface.BOLD -> "BOLD"
+                Typeface.ITALIC -> "ITALIC"
+                else -> "STYLE"
+            }
+            is UnderlineSpan -> "UNDERLINE"
+            else -> span.javaClass.simpleName
+        }
+    }
+    private fun copySpan(span: Any): Any {
+        return when (span) {
+            is StyleSpan -> StyleSpan(span.style)
+            is ForegroundColorSpan -> ForegroundColorSpan(span.foregroundColor)
+            is AbsoluteSizeSpan -> AbsoluteSizeSpan(span.size, span.dip)
+            is UnderlineSpan -> UnderlineSpan()
+            else -> span
+        }
     }
 }
